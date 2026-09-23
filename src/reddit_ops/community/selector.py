@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from anthropic import Anthropic
 
 from ..config import ANTHROPIC_API_KEY, STANDARDS_DIR
-from ..reddit_client import get_client
+from ..reddit_client import get_json
 from .rules import fetch_rules
 
 _COMMUNITY_STANDARD_PATH = STANDARDS_DIR / "community_standard.md"
@@ -21,14 +21,15 @@ class SubredditCandidate:
 
 def discover_candidates(theme_keywords: list[str], limit_per_keyword: int = 15) -> list[str]:
     """
-    用 Reddit 官方搜索接口按关键词发现候选社区,不依赖静态白名单。
-    返回的每一个名字都是真实存在的 subreddit —— 这一步本身就是"防幻觉"验证。
+    用 Reddit 公开的 /subreddits/search 接口按关键词发现候选社区,不依赖静态
+    白名单。返回的每一个名字都是真实存在的 subreddit —— 这一步本身就是
+    "防幻觉"验证。
     """
-    reddit = get_client()
     seen: set[str] = set()
     for kw in theme_keywords:
-        for sub in reddit.subreddits.search(kw, limit=limit_per_keyword):
-            seen.add(sub.display_name)
+        result = get_json("/subreddits/search", params={"q": kw, "limit": limit_per_keyword})
+        for child in result["data"]["children"]:
+            seen.add(child["data"]["display_name"])
     return sorted(seen)
 
 

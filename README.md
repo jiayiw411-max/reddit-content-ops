@@ -28,7 +28,7 @@ Reddit 场景做了两处关键调整:
          人工确认 ──▶ 你手动发布(工具不自动发帖)
                │
                ▼
-      表现追踪(只读 Reddit API:score / num_comments / upvote_ratio / num_crossposts)
+      表现追踪(只读 Reddit 公开 .json 接口:score / num_comments / upvote_ratio / num_crossposts)
                │
                ▼
    校准(真实表现 vs 预测 bucket,连同 BanReport 一起反馈进下一轮生成与选社区)
@@ -55,13 +55,19 @@ channel 区分 main/blind/cross)、`PerformanceSnapshot`(每次抓取的表现�
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-cp .env.example .env  # 填入 Reddit script app 凭证 + ANTHROPIC_API_KEY
+cp .env.example .env  # 填入 REDDIT_USER_AGENT + ANTHROPIC_API_KEY
 reddit-ops init
 ```
 
-Reddit 凭证:在 [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps) 用你的小号
-注册一个 "script" 类型应用,拿到 client_id / client_secret。这是 Reddit 官方允许的
-个人开发者用法,只读用量远低于免费额度。
+**Reddit 这边不需要注册任何应用。** Reddit 在 2025-11-11 关闭了个人开发者自助
+注册 OAuth 应用的入口(Responsible Builder Policy),reddit.com/prefs/apps 的
+create app 现在会卡在 reCAPTCHA 循环走不通,这是平台层面的限制,不是配置问题。
+我们读的都是公开数据(子版规则、帖子分数/评论数),所以直接走 Reddit 公开只读
+`.json` 接口(见 [`reddit_client.py`](src/reddit_ops/reddit_client.py)),
+只需要规范的 `REDDIT_USER_AGENT`,不需要 client_id/secret。代价是限速更紧
+(未认证约 10 req/min,代码里已做节流),对我们这种小用量的追踪场景够用。
+如果以后申请到官方 API 审批通过,可以把 `reddit_client.get_json` 换成 OAuth
+客户端,其余模块不用动。
 
 ## 命令
 

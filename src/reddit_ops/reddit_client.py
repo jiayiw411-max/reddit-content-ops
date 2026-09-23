@@ -1,50 +1,40 @@
 from __future__ import annotations
 
-import praw
+import time
 
-from .config import (
-    REDDIT_CLIENT_ID,
-    REDDIT_CLIENT_SECRET,
-    REDDIT_PASSWORD,
-    REDDIT_USER_AGENT,
-    REDDIT_USERNAME,
-)
+import requests
 
-_reddit: praw.Reddit | None = None
+from .config import REDDIT_USER_AGENT
+
+BASE_URL = "https://www.reddit.com"
+
+# Reddit 在 2025-11-11 关闭了个人开发者自助注册 OAuth 应用的入口(Responsible
+# Builder Policy),script app 现在卡在 reCAPTCHA 循环、走不通,不是配置问题。
+# 我们要读的都是公开数据(子版规则、帖子分数/评论数),公开只读 .json 接口
+# 不受这次收紧影响,不需要注册应用、不需要 client_id/secret。
+# 未认证访问限速更紧(约 10 req/min),所以这里做了个简单节流。
+_MIN_INTERVAL_SECONDS = 6.0  # ~10 req/min 留出余量
+_last_request_at: float = 0.0
 
 
-def get_client() -> praw.Reddit:
+def get_json(path: str, params: dict | None = None) -> dict:
     """
-    共享的只读 PRAW 客户端。注册一个 reddit.com/prefs/apps 上的 "script" 类型
-    应用即可获得 client_id/secret —— 这是 Reddit 官方允许的个人开发者用法,
-    不是抓取。带上规范的 User-Agent 是不被限流/拦截的关键。
-
-    我们只做只读(社区规则、帖子表现数据都是公开信息,读谁的帖子都不需要
-    "登录成那个账号"),所以用户名/密码是可选的:填了就走密码授权,
-    不填就自动走 app-only 只读授权,两种都能读公开数据,没必要把账号密码
-    放进 .env。
+    直接调 Reddit 公开只读 .json 接口,例如 get_json("/r/CasualUK/about") 或
+    get_json("/comments/abc123")。path 不带 .json 后缀,这里统一拼接。
     """
-    global _reddit
-    if _reddit is None:
-        missing = [
-            name
-            for name, val in [
-                ("REDDIT_CLIENT_ID", REDDIT_CLIENT_ID),
-                ("REDDIT_CLIENT_SECRET", REDDIT_CLIENT_SECRET),
-            ]
-            if not val
-        ]
-        if missing:
-            raise RuntimeError(f"missing reddit credentials: {missing} — see .env.example")
+    global _last_request_at
 
-        kwargs: dict[str, str] = {
-            "client_id": REDDIT_CLIENT_ID,
-            "client_secret": REDDIT_CLIENT_SECRET,
-            "user_agent": REDDIT_USER_AGENT,
-        }
-        if REDDIT_USERNAME and REDDIT_PASSWORD:
-            kwargs["username"] = REDDIT_USERNAME
-            kwargs["password"] = REDDIT_PASSWORD
+    elapsed = time.monotonic() - _last_request_at
+    if elapsed < _MIN_INTERVAL_SECONDS:
+        time.sleep(_MIN_INTERVAL_SECONDS - elapsed)
 
-        _reddit = praw.Reddit(**kwargs)
-    return _reddit
+    url = f"{BASE_URL}{path}.json"
+    response = requests.get(
+        url,
+        params=params,
+        headers={"User-Agent": REDDIT_USER_AGENT},
+        timeout=10,
+    )
+    _last_request_at = time.monotonic()
+    response.raise_for_status()
+    return response.json()
