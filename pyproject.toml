@@ -1,0 +1,29 @@
+[project]
+name = "reddit-ops"
+version = "0.1.0"
+description = "Reddit AI 内容运营助手 —— 素材生成、社区匹配、发布追踪与评测复盘"
+requires-python = ">=3.10"
+dependencies = [
+    "sqlalchemy>=2.0",
+    "praw>=7.7",
+    "anthropic>=0.40",
+    "click>=8.1",
+    "python-dotenv>=1.0",
+    "apscheduler>=3.10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+reddit-ops = "reddit_ops.cli:cli"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
