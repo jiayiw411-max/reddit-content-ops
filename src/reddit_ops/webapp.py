@@ -2,13 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 from .db.models import Post, PostStatus
 from .db.session import get_session
+from .images import list_images, read_image_bytes
 from .tracker.manual import record_snapshot
 from .workspace import create_draft, record_attempt
 
@@ -26,14 +27,31 @@ app.add_middleware(
 # ---------- 创作台:选图 → 撰写 → 选社区(带失败重试) ----------
 
 
+@app.get("/api/images")
+def api_list_images(folder: str) -> list[dict]:
+    try:
+        return list_images(folder)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/images/file")
+def api_image_file(path: str) -> Response:
+    try:
+        data, media_type = read_image_bytes(path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return Response(content=data, media_type=media_type)
+
+
 class DraftPayload(BaseModel):
     image_path: str
-    image_description: str
+    extra_context: str = ""
 
 
 @app.post("/api/drafts")
 def api_create_draft(payload: DraftPayload) -> dict:
-    return create_draft(payload.image_path, payload.image_description)
+    return create_draft(payload.image_path, payload.extra_context)
 
 
 class AttemptPayload(BaseModel):

@@ -9,11 +9,12 @@ from .generation.generator import draft_post
 from .review.blind_scorer import blind_score_draft
 
 
-def create_draft(image_path: str, image_description: str) -> dict:
+def create_draft(image_path: str, extra_context: str = "") -> dict:
     """
     创作台的入口:选图 → 撰写。建一条 Image(如果这个路径没记录过)+ 一条
-    Post(status=DRAFT),生成标题/正文,再给出候选社区建议(未验证,见
-    community/selector.py)。选社区、尝试发布是下一步,不在这里做。
+    Post(status=DRAFT),直接读图片内容生成标题/正文(多模态,不是靠文字描述),
+    再给出候选社区建议(未验证,见 community/selector.py)。选社区、尝试发布
+    是下一步,不在这里做。
     """
     session = get_session()
 
@@ -22,8 +23,9 @@ def create_draft(image_path: str, image_description: str) -> dict:
         image = Image(path=image_path)
         session.add(image)
         session.flush()
+    image.used = True
 
-    draft = draft_post(image_description)
+    draft = draft_post(image_path, extra_context)
     candidates = suggest_communities(draft.title, draft.body)
 
     post = Post(
