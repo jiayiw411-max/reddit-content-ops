@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from ..db.models import PerformanceSnapshot, Post, PostStatus
+from ..db.models import PerformanceSnapshot, Post, PostStatus, Subreddit
 from ..db.session import get_session
 
 
@@ -28,6 +28,8 @@ def record_snapshot(
     post = session.query(Post).filter(Post.reddit_url == url).one_or_none()
 
     if post is None:
+        if subreddit and session.get(Subreddit, subreddit) is None:
+            session.add(Subreddit(name=subreddit))
         post = Post(
             reddit_url=url,
             subreddit_name=subreddit,

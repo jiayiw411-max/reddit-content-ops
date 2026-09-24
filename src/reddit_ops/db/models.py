@@ -80,6 +80,7 @@ class Post(Base):
     rubric_scores: Mapped[list["RubricScore"]] = relationship(back_populates="post")
     snapshots: Mapped[list["PerformanceSnapshot"]] = relationship(back_populates="post")
     ban_reports: Mapped[list["BanReport"]] = relationship(back_populates="post")
+    community_attempts: Mapped[list["CommunityAttempt"]] = relationship(back_populates="post")
 
 
 class RubricScore(Base):
@@ -123,3 +124,23 @@ class BanReport(Base):
     root_cause_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     post: Mapped[Post] = relationship(back_populates="ban_reports")
+
+
+class CommunityAttempt(Base):
+    """
+    "选社区"这一步的尝试记录——发布前的循环(推荐候选→你去发→失败就换一个),
+    跟 BanReport 不是一回事:BanReport 是帖子已经活着、之后被删/被封;这个是
+    压根没发成功,连一条"活的帖子"都不存在。outcome="posted" 那一条对应的就是
+    最终选中的社区,此时 Post 本身的 subreddit_name/reddit_url/status 也会同步更新。
+    """
+
+    __tablename__ = "community_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id"))
+    subreddit_name: Mapped[str] = mapped_column(String(128))
+    outcome: Mapped[str] = mapped_column(String(16))  # "rejected" | "posted"
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempted_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+    post: Mapped[Post] = relationship(back_populates="community_attempts")

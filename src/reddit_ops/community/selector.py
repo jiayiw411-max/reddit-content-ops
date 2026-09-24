@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from anthropic import Anthropic
 
 from ..config import ANTHROPIC_API_KEY, STANDARDS_DIR
-from ..reddit_client import get_json
-from .rules import fetch_rules
 
 _COMMUNITY_STANDARD_PATH = STANDARDS_DIR / "community_standard.md"
 
@@ -16,37 +14,24 @@ _COMMUNITY_STANDARD_PATH = STANDARDS_DIR / "community_standard.md"
 class SubredditCandidate:
     name: str
     fit_reason: str
-    required_actions: list[str]
+    verified: bool  # 恒为 False,见下方说明
 
 
-def discover_candidates(theme_keywords: list[str], limit_per_keyword: int = 15) -> list[str]:
-    """
-    用 Reddit 公开的 /subreddits/search 接口按关键词发现候选社区,不依赖静态
-    白名单。返回的每一个名字都是真实存在的 subreddit —— 这一步本身就是
-    "防幻觉"验证。
-    """
-    seen: set[str] = set()
-    for kw in theme_keywords:
-        result = get_json("/subreddits/search", params={"q": kw, "limit": limit_per_keyword})
-        for child in result["data"]["children"]:
-            seen.add(child["data"]["display_name"])
-    return sorted(seen)
-
-
-def rank_candidates(
-    candidate_names: list[str], draft_title: str, draft_body: str, top_n: int = 5
+def suggest_communities(
+    draft_title: str, draft_body: str, top_n: int = 5
 ) -> list[SubredditCandidate]:
     """
-    按 standards/community_standard.md 对候选社区排序,选 top_n,只给一句话理由。
-    再对入选的每一个现查规则,只有真正"必须做的动作"(强制 flair / 强制标题格式)
-    才写进 required_actions —— 从自由文本规则里稳健地抽取"是否强制"这件事,
-    比结构化字段本身更难,先做成显式 TODO,留到规则误判率有真实数据后再细化,
-    不在骨架阶段假装已经解决。
+    完全基于 LLM 训练知识给候选社区排序,不做实时搜索/验证——"发现+验证全网
+    社区是否真实存在"需要 Reddit 搜索接口,这条路目前被反爬拦着,只有官方 API
+    审批下来才能补上(见 reddit_client.py 的说明)。
+
+    在那之前,每个候选都标 verified=False:大社区(比如 r/CasualUK 这种量级)
+    训练知识里的信息大概率没过期,但不保证,小众/新兴社区风险更高。使用方
+    发布前打开对应页面看一眼是唯一现在就能做的验证方式,这一步不需要额外工具,
+    因为发帖本来就要打开那个页面。
     """
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY not set — see .env.example")
-    if not candidate_names:
-        return []
 
     community_standard = _COMMUNITY_STANDARD_PATH.read_text(encoding="utf-8")
     client = Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -58,11 +43,10 @@ title: {draft_title}
 body:
 {draft_body}
 
-# 候选社区(必须只从这个列表里选,不能编造)
-{", ".join(candidate_names)}
-
-从候选里选出最匹配的 {top_n} 个,按匹配度降序排列。按 JSON 输出,只输出 JSON:
-{{"ranked": [{{"name": "...", "fit_reason": "一句话"}}, ...]}}"""
+你现在没有实时搜索 Reddit 的能力,只能凭你训练知识里的了解给建议。选出最匹配
+这篇草稿的 {top_n} 个真实 subreddit 名字,按匹配度降序排列。只推荐你比较确信
+真实存在、活跃的社区,不确定的宁可少给。按 JSON 输出,只输出 JSON:
+{{"suggested": [{{"name": "...", "fit_reason": "一句话"}}, ...]}}"""
 
     response = client.messages.create(
         model="claude-sonnet-5",
@@ -71,14 +55,7 @@ body:
     )
     payload = json.loads(response.content[0].text)
 
-    ranked = [
-        SubredditCandidate(name=item["name"], fit_reason=item["fit_reason"], required_actions=[])
-        for item in payload["ranked"]
+    return [
+        SubredditCandidate(name=item["name"], fit_reason=item["fit_reason"], verified=False)
+        for item in payload["suggested"]
     ]
-
-    for candidate in ranked:
-        fetch_rules(candidate.name)  # 预热缓存,供后续人工确认前查看
-        # TODO(phase 2): 从 structured_rules + sidebar_description 里稳健抽取
-        # "强制 flair / 强制标题格式" 写入 candidate.required_actions
-
-    return ranked

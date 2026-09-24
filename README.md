@@ -1,8 +1,8 @@
 # Reddit AI 内容运营助手
 
-从本地图片素材生成 Reddit 帖子草稿,匹配最合适的社区,人工确认后手动发布
-(工具本身不自动发帖),并持续追踪发布后的表现数据,用一套可校准的评测方法论
-反哺下一轮选题——而不是单纯的"发帖机器人"。
+一个本地网页,从图片生成 Reddit 帖子草稿、辅助选社区、发布后追踪表现数据,
+用一套可校准的评测方法论反哺下一轮选题——而不是单纯的"发帖机器人"。工具不
+自动发帖、不自动访问 Reddit(原因见下文),每一步都是"AI 辅助 + 人工确认"。
 
 方法论继承自 [`video-use`](../video-use) 项目里验证过的 rubric + 盲评 + bucket
 校准模式(那边是给视频稿子用的 Claude skill),在这里用真代码重新实现,并针对
@@ -13,26 +13,39 @@ Reddit 场景做了两处关键调整:
 - 表现 bucket 用"相对该 subreddit 历史基准"而不是绝对 upvotes 数字——不同社区
   量级差好几个数量级,不可比
 
-## 架构
+## 流程
 
 ```
-素材库 ──▶ 生成草稿(LLM,按 standards/writing_standard.md)
-               │
-               ▼
-        社区匹配(按 standards/community_standard.md,现查 Reddit 官方规则接口)
-               │
-               ▼
-   盲评打分 + bucket 预测(按 standards/review_rubric.md,不接触任何历史表现数据)
-               │
-               ▼
-         人工确认 ──▶ 你手动发布(工具不自动发帖)
-               │
-               ▼
-      表现追踪(见下方"读取 Reddit 数据这件事"——目前是人工录入,官方 API 批下来后可切自动)
-               │
-               ▼
-   校准(真实表现 vs 预测 bucket,连同 BanReport 一起反馈进下一轮生成与选社区)
+选图 → 撰写草稿(LLM,按 standards/writing_standard.md)
+         │
+         ▼
+      选社区(LLM 按训练知识建议候选,标"未验证"——原因见下文)
+         │
+         ▼
+      你去对应社区尝试发布 ──失败──▶ 在创作台标记失败原因,换一个候选重试
+         │
+       成功
+         ▼
+   盲评打分 + bucket 预测(此时才知道最终社区,按 standards/review_rubric.md,
+   不接触任何真实表现数据)
+         │
+         ▼
+      进复盘看板:表现追踪(人工录入 + 书签工具,见下文)
+         │
+         ▼
+   校准(真实表现 vs 预测 bucket,反馈进下一轮生成与选社区)
 ```
+
+选社区失败(被 AutoMod 拦、缺 flair 之类)和发布后被删,是两件不同的事,分别记在
+`CommunityAttempt`(发布前的重试循环)和 `BanReport`(帖子活过、后来被删)两张表里,
+不混在一起。
+
+## 界面
+
+`reddit-ops serve` 启动一个本地网页,两个区块:
+
+- **创作台**:选图、生成草稿、看候选社区建议、记录每次发布尝试的成败
+- **复盘看板**:已发布帖子的表现数据历史,书签工具录入的数据自动显示在这里
 
 ## 三份标准文档
 
@@ -45,9 +58,10 @@ Reddit 场景做了两处关键调整:
 
 ## 数据模型
 
-`Image` → `Post`(草稿 + 状态 + 风险 gate 结果 + 预测 bucket)→ `RubricScore`(按
-channel 区分 main/blind/cross)、`PerformanceSnapshot`(每次抓取的表现快照)、
-`BanReport`(被封反馈,进复盘)。见 [`src/reddit_ops/db/models.py`](src/reddit_ops/db/models.py)。
+`Image` → `Post`(草稿 + 状态 + 风险 gate 结果 + 预测 bucket)→
+`CommunityAttempt`(发布前的选社区重试记录)、`RubricScore`(按 channel 区分
+main/blind/cross)、`PerformanceSnapshot`(每次录入的表现快照)、`BanReport`
+(发布后被删的反馈)。见 [`src/reddit_ops/db/models.py`](src/reddit_ops/db/models.py)。
 
 ## 设置
 
@@ -57,6 +71,7 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 cp .env.example .env  # 填入 REDDIT_USER_AGENT + ANTHROPIC_API_KEY
 reddit-ops init
+reddit-ops serve       # 打开 http://127.0.0.1:8765
 ```
 
 ### 读取 Reddit 数据这件事
@@ -67,26 +82,27 @@ Builder Policy),连公开只读的 `.json` 接口现在也会被指纹级反爬�
 自动化能绕过的——那条路要求主动绕过平台的反自动化保护,这个项目不走那条路,
 细节见 [`src/reddit_ops/reddit_client.py`](src/reddit_ops/reddit_client.py) 的注释。
 
-现阶段用两条腿走路:
+这带来两个现实限制,现阶段的应对方式:
 
-1. **官方 API 审批**(申请中,走 [Reddit 的 Data Access Request](https://support.reddithelp.com/hc/en-us/requests/new?ticket_form_id=14868593862164)):
-   批下来之后 `tracker/fetcher.py` 就能自动抓取,不用改其余模块。
-2. **人工录入**(现在就能用):`reddit-ops record` 命令 + [`tools/`](tools/) 里的
-   浏览器书签工具——你自己发完帖子后,打开帖子页面点一下书签,它读一下页面上
-   本来就显示给你的 score/评论数,拼好一条命令复制到剪贴板,你粘贴到终端就
-   记录完了。好处是浏览量这种官方 API 永远拿不到、只有作者本人能看到的数据,
-   这条路反而能录进去。
+1. **没法自动发现/验证全网社区**:选社区那一步,LLM 只能凭训练知识给建议,
+   每个候选都标"未验证"。发布前你自己打开对应页面看一眼规则,这一步不算
+   额外负担,因为你反正要去那里手动发帖。
+2. **没法自动追踪表现数据**:`reddit-ops record` 命令 + [`tools/`](tools/)
+   里的浏览器书签——你自己发完帖子后打开帖子页面点一下书签,读一下页面上
+   本来就显示给你的 score/评论数,自动发到本地看板存起来。好处是浏览量这种
+   官方 API 永远拿不到、只有作者本人能看到的数据,这条路反而能录进去。
 
-`reddit-ops draft` 生成草稿这一步完全不需要读 Reddit,不受影响。
+**官方 API 审批**(申请中,走 [Reddit 的 Data Access Request](https://support.reddithelp.com/hc/en-us/requests/new?ticket_form_id=14868593862164))
+批下来之后,这两个限制都会解除:选社区能实时搜索验证,`tracker/fetcher.py`
+能自动抓取表现数据,不用改其余模块。
 
 ## 命令
 
 ```bash
-reddit-ops init                                    # 初始化本地 SQLite
-reddit-ops draft "<图片描述>" <subreddit>            # 生成一篇草稿
-reddit-ops score "<标题>" "<正文>" <subreddit>       # 盲评打分 + bucket 预测
+reddit-ops init      # 初始化本地 SQLite
+reddit-ops serve      # 启动网页(创作台 + 复盘看板),默认 8765 端口
 reddit-ops record --url <帖子链接> --score N --comments N [--views N]  # 人工录入一次表现快照
-reddit-ops track                                    # 官方 API 批下来后:自动抓取所有已发布帖子的最新表现
+reddit-ops track      # 官方 API 批下来后:自动抓取所有已发布帖子的最新表现
 ```
 
 ## 测试
@@ -97,8 +113,8 @@ pytest
 
 ## 阶段
 
-1. ✅ 数据模型 + 三份标准文档 + LLM 生成/打分 CLI 跑通
-2. ✅ 表现追踪(人工录入 + 书签工具),官方 API 审批中
-3. 社区匹配的"强制动作"抽取(选社区规则 → 结构化 required_actions)+ 校准循环(`review/calibration.py`,待建)
-4. 官方 API 批下来后:`track` 命令自动化 + 校准反馈自动生成"下一轮实验假设"
-5. 测试补全(mock Reddit/Anthropic 调用) + 部署
+1. ✅ 数据模型 + 三份标准文档 + LLM 生成/打分跑通
+2. ✅ 创作台网页(选图→撰写→选社区→失败重试循环)+ 复盘看板(人工录入 + 书签),官方 API 审批中
+3. 社区规则的"强制动作"抽取(比如必须加的 flair)+ 校准循环(`review/calibration.py`,待建)
+4. 官方 API 批下来后:选社区实时验证 + `track` 命令自动化 + 校准反馈自动生成"下一轮实验假设"
+5. 测试补全(mock Anthropic 调用) + 部署

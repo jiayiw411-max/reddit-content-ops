@@ -16,10 +16,15 @@ class DraftResult:
     body: str
 
 
-def draft_post(image_description: str, subreddit: str, community_notes: str = "") -> DraftResult:
+def draft_post(image_description: str) -> DraftResult:
     """
     按 standards/writing_standard.md 生成标题+正文。改文案规则改那份文件,
     不用改这里的代码。
+
+    流程顺序是 选图 → 撰写 → 选社区,写这一步时还不知道要发哪个社区,所以
+    不接受 subreddit 参数——"社区联动"的那条规则(比如 r/food 要求正文带
+    tips)在选定社区之后,由使用方决定要不要针对那个社区再润色一版,不在
+    这一步里强求。
     """
     if not ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY not set — see .env.example")
@@ -32,9 +37,7 @@ def draft_post(image_description: str, subreddit: str, community_notes: str = ""
 # 图片描述
 {image_description}
 
-# 目标社区
-r/{subreddit}
-{community_notes}
+这一步还没选定发布社区,先按通用标准写,不用假设任何特定社区的规则。
 
 按 JSON 输出,只输出 JSON,不要多余文字:
 {{"title": "...", "body": "..."}}"""

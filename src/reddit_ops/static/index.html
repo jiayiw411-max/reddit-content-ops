@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>Reddit AI 内容运营助手</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: -apple-system, "PingFang SC", sans-serif; max-width: 960px; margin: 2rem auto; padding: 0 1rem; color: #1a1a1a; }
+  h1 { font-size: 1.3rem; margin-bottom: 0.25rem; }
+  .tabs { display: flex; gap: 0.5rem; margin: 1rem 0 1.5rem; border-bottom: 1px solid #ddd; }
+  .tab { padding: 0.5rem 1rem; cursor: pointer; border: none; background: none; font-size: 0.95rem; color: #666; border-bottom: 2px solid transparent; }
+  .tab.active { color: #1a1a1a; border-bottom-color: #ff4500; font-weight: 600; }
+  section { display: none; }
+  section.active { display: block; }
+  .card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; margin-bottom: 1rem; }
+  label { display: block; font-size: 0.85rem; color: #555; margin: 0.75rem 0 0.25rem; }
+  input[type=text], textarea { width: 100%; box-sizing: border-box; padding: 0.5rem; border: 1px solid #ccc; border-radius: 4px; font-size: 0.9rem; font-family: inherit; }
+  textarea { min-height: 6rem; resize: vertical; }
+  button { background: #ff4500; color: white; border: none; border-radius: 4px; padding: 0.5rem 1rem; font-size: 0.9rem; cursor: pointer; margin-top: 0.75rem; }
+  button.secondary { background: #555; }
+  button.ghost { background: none; color: #ff4500; border: 1px solid #ff4500; padding: 0.3rem 0.6rem; font-size: 0.8rem; margin: 0 0.25rem 0.25rem 0; }
+  button:disabled { background: #ccc; cursor: not-allowed; }
+  .candidate { display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid #eee; }
+  .candidate:last-child { border-bottom: none; }
+  .badge { font-size: 0.7rem; padding: 0.1rem 0.4rem; border-radius: 3px; background: #fff3e0; color: #b26a00; margin-left: 0.4rem; }
+  .fail-badge { background: #fde8e8; color: #b02a2a; }
+  .ok-badge { background: #e6f6ea; color: #0a7d2c; }
+  .meta { color: #666; font-size: 0.85rem; margin-bottom: 0.75rem; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 0.35rem 0.5rem; border-bottom: 1px solid #eee; }
+  .delta { color: #0a7d2c; font-weight: 600; }
+  .empty { color: #888; padding: 2rem 0; text-align: center; }
+  .attempts-log { font-size: 0.8rem; color: #666; margin-top: 0.5rem; }
+  .attempts-log div { padding: 0.15rem 0; }
+</style>
+</head>
+<body>
+  <h1>Reddit AI 内容运营助手</h1>
+  <div class="tabs">
+    <button class="tab active" data-tab="workspace">创作台</button>
+    <button class="tab" data-tab="review">复盘看板</button>
+  </div>
+
+  <section id="workspace" class="active">
+    <div class="card">
+      <label>图片路径</label>
+      <input type="text" id="imagePath" placeholder="/Users/你/Desktop/reddit图片/xxx.jpg">
+      <label>图片描述(内容、场景,越具体生成越好)</label>
+      <textarea id="imageDesc" placeholder="例如:M&S 超市买的提拉米苏,3.5镑,包装很朴素但味道很惊艳"></textarea>
+      <button id="genBtn">生成草稿</button>
+    </div>
+    <div id="draftArea"></div>
+    <h3>草稿历史</h3>
+    <div id="draftHistory" class="empty">加载中...</div>
+  </section>
+
+  <section id="review">
+    <div id="reviewRoot" class="empty">加载中...</div>
+  </section>
+
+<script>
+document.querySelectorAll('.tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('section').forEach(s => s.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById(btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'review') loadReview();
+    if (btn.dataset.tab === 'workspace') loadDrafts();
+  });
+});
+
+function renderDraft(draft) {
+  const wrap = document.createElement('div');
+  wrap.className = 'card';
+  wrap.innerHTML = `
+    <label>标题</label>
+    <input type="text" class="titleInput" value="${escapeAttr(draft.title)}">
+    <label>正文</label>
+    <textarea class="bodyInput">${escapeHtml(draft.body)}</textarea>
+    <label>候选社区(未验证 —— 发布前自己确认一下这个社区还在、规则没变)</label>
+    <div class="candidates"></div>
+    <div class="attempts-log"></div>
+  `;
+  const candWrap = wrap.querySelector('.candidates');
+  (draft.candidates || []).forEach(c => {
+    const row = document.createElement('div');
+    row.className = 'candidate';
+    row.innerHTML = `
+      <div><b>r/${c.name}</b><span class="badge">未验证</span> — ${escapeHtml(c.fit_reason || '')}</div>
+      <div>
+        <button class="ghost okBtn">发成功了</button>
+        <button class="ghost failBtn">被拒/失败</button>
+      </div>`;
+    row.querySelector('.okBtn').addEventListener('click', () => markAttempt(draft.post_id, c.name, 'posted', wrap));
+    row.querySelector('.failBtn').addEventListener('click', () => markAttempt(draft.post_id, c.name, 'rejected', wrap));
+    candWrap.appendChild(row);
+  });
+
+  const manualRow = document.createElement('div');
+  manualRow.className = 'candidate';
+  manualRow.innerHTML = `
+    <input type="text" class="manualSub" placeholder="或者手动填一个社区名(不带 r/)" style="width:auto;flex:1;margin-right:0.5rem;">
+    <div>
+      <button class="ghost okBtn">发成功了</button>
+      <button class="ghost failBtn">被拒/失败</button>
+    </div>`;
+  manualRow.querySelector('.okBtn').addEventListener('click', () => {
+    const name = manualRow.querySelector('.manualSub').value.trim();
+    if (name) markAttempt(draft.post_id, name, 'posted', wrap);
+  });
+  manualRow.querySelector('.failBtn').addEventListener('click', () => {
+    const name = manualRow.querySelector('.manualSub').value.trim();
+    if (name) markAttempt(draft.post_id, name, 'rejected', wrap);
+  });
+  candWrap.appendChild(manualRow);
+
+  renderAttemptsLog(wrap, draft.attempts || []);
+  return wrap;
+}
+
+function renderAttemptsLog(wrap, attempts) {
+  const log = wrap.querySelector('.attempts-log');
+  log.innerHTML = attempts.map(a => {
+    const badge = a.outcome === 'posted' ? '<span class="badge ok-badge">发布成功</span>' : '<span class="badge fail-badge">失败</span>';
+    return `<div>r/${a.subreddit} ${badge} ${a.reason ? '— ' + escapeHtml(a.reason) : ''}</div>`;
+  }).join('');
+}
+
+async function markAttempt(postId, subreddit, outcome, wrap) {
+  let reason = null, redditUrl = null;
+  if (outcome === 'rejected') {
+    reason = prompt('失败原因(比如"被 AutoMod 拦了" / "要求加 flair 没加"):', '') || '';
+  } else {
+    redditUrl = prompt('帖子链接:', '') || null;
+  }
+  const res = await fetch(`/api/drafts/${postId}/attempts`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subreddit, outcome, reason, reddit_url: redditUrl })
+  });
+  if (!res.ok) { alert('记录失败: ' + res.status); return; }
+  if (outcome === 'posted') {
+    alert('已标记发布成功,移入复盘看板。');
+    loadDrafts();
+  } else {
+    const attempts = JSON.parse(wrap.dataset.attempts || '[]');
+    attempts.push({ subreddit, outcome, reason });
+    wrap.dataset.attempts = JSON.stringify(attempts);
+    renderAttemptsLog(wrap, attempts);
+  }
+}
+
+document.getElementById('genBtn').addEventListener('click', async () => {
+  const imagePath = document.getElementById('imagePath').value.trim();
+  const imageDesc = document.getElementById('imageDesc').value.trim();
+  if (!imageDesc) { alert('至少填一下图片描述'); return; }
+  const btn = document.getElementById('genBtn');
+  btn.disabled = true; btn.textContent = '生成中...';
+  try {
+    const res = await fetch('/api/drafts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ image_path: imagePath, image_description: imageDesc })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const draft = await res.json();
+    const area = document.getElementById('draftArea');
+    area.innerHTML = '';
+    area.appendChild(renderDraft(draft));
+  } catch (err) {
+    alert('生成失败: ' + err + '\n(检查一下 .env 里 ANTHROPIC_API_KEY 是否已配置)');
+  } finally {
+    btn.disabled = false; btn.textContent = '生成草稿';
+  }
+});
+
+async function loadDrafts() {
+  const res = await fetch('/api/drafts');
+  const drafts = await res.json();
+  const root = document.getElementById('draftHistory');
+  if (drafts.length === 0) {
+    root.className = 'empty';
+    root.textContent = '还没有未完成的草稿。';
+    return;
+  }
+  root.className = '';
+  root.innerHTML = '';
+  drafts.forEach(d => {
+    const wrap = document.createElement('div');
+    wrap.className = 'card';
+    wrap.innerHTML = `<b>${escapeHtml(d.title || '(未命名)')}</b><div class="meta">状态: ${d.status}</div>`;
+    renderAttemptsLog(wrap, d.attempts);
+    root.appendChild(wrap);
+  });
+}
+
+async function loadReview() {
+  const res = await fetch('/api/posts');
+  const posts = await res.json();
+  const root = document.getElementById('reviewRoot');
+  if (posts.length === 0) {
+    root.className = 'empty';
+    root.textContent = '还没有已发布的帖子记录,先用书签工具或手动记一条试试。';
+    return;
+  }
+  root.className = '';
+  root.innerHTML = posts.map(p => {
+    const rows = p.snapshots.map(s => `
+      <tr>
+        <td>${new Date(s.checked_at).toLocaleString('zh-CN')}</td>
+        <td>${s.score}</td>
+        <td>${s.comments}</td>
+        <td>${s.upvote_ratio ?? '-'}</td>
+        <td>${s.views ?? '-'}</td>
+      </tr>`).join('');
+    const first = p.snapshots[0];
+    const last = p.snapshots[p.snapshots.length - 1];
+    const delta = (first && last && p.snapshots.length > 1)
+      ? `<span class="delta">score +${last.score - first.score}</span>` : '';
+    const bucket = p.predicted_bucket ? `<span class="meta">预测 bucket: ${p.predicted_bucket}</span>` : '';
+    return `
+      <div class="card">
+        <h2 style="font-size:1rem;margin:0 0 0.25rem;">${escapeHtml(p.title || '(未命名)')} ${delta}</h2>
+        <div class="meta">r/${p.subreddit ?? '?'} · <a href="${p.url}" target="_blank">${p.url}</a> ${bucket}</div>
+        <table>
+          <thead><tr><th>时间</th><th>score</th><th>评论数</th><th>upvote比例</th><th>浏览量</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>`;
+  }).join('');
+}
+
+function escapeHtml(s) {
+  return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function escapeAttr(s) { return escapeHtml(s); }
+
+loadDrafts();
+</script>
+</body>
+</html>
