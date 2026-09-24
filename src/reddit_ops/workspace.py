@@ -1,31 +1,46 @@
 from __future__ import annotations
 
 import datetime as dt
+import random
 
 from .community.selector import suggest_communities
 from .db.models import CommunityAttempt, Image, Post, PostStatus, RubricScore, ScoreChannel, Subreddit
 from .db.session import get_session
 from .generation.generator import draft_post
+from .images import list_images
 from .review.blind_scorer import blind_score_draft
 
 
-def create_draft(image_path: str, extra_context: str = "") -> dict:
+def create_draft(folder: str, extra_context: str = "") -> dict:
     """
-    创作台的入口:选图 → 撰写。建一条 Image(如果这个路径没记录过)+ 一条
+    创作台的入口:选图 → 撰写。对标原来 reddit-poster skill 的逻辑——给一个
+    文件夹,自动跳过已经用过的图片(Image.used,等价于原来的 used_images.txt),
+    在剩下的里面随机挑一张,不用人工点选。挑中后建一条 Image + 一条
     Post(status=DRAFT),直接读图片内容生成标题/正文(多模态,不是靠文字描述),
     再给出候选社区建议(未验证,见 community/selector.py)。选社区、尝试发布
     是下一步,不在这里做。
     """
     session = get_session()
 
-    image = session.query(Image).filter(Image.path == image_path).one_or_none()
+    available = list_images(folder)
+    if not available:
+        raise ValueError(f"这个文件夹里没找到支持的图片: {folder}")
+
+    used_paths = {img.path for img in session.query(Image).filter(Image.used.is_(True)).all()}
+    candidates_pool = [f for f in available if f["path"] not in used_paths]
+    if not candidates_pool:
+        raise ValueError("这个文件夹里的图片都用过了")
+
+    chosen_path = random.choice(candidates_pool)["path"]
+
+    image = session.query(Image).filter(Image.path == chosen_path).one_or_none()
     if image is None:
-        image = Image(path=image_path)
+        image = Image(path=chosen_path)
         session.add(image)
         session.flush()
     image.used = True
 
-    draft = draft_post(image_path, extra_context)
+    draft = draft_post(chosen_path, extra_context)
     candidates = suggest_communities(draft.title, draft.body)
 
     post = Post(
@@ -39,6 +54,7 @@ def create_draft(image_path: str, extra_context: str = "") -> dict:
 
     return {
         "post_id": post.id,
+        "image_path": chosen_path,
         "title": post.title,
         "body": post.body,
         "candidates": [

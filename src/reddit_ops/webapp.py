@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 from .db.models import Post, PostStatus
 from .db.session import get_session
-from .images import list_images, read_image_bytes
+from .images import read_image_bytes
 from .tracker.manual import record_snapshot
 from .workspace import create_draft, record_attempt
 
@@ -27,16 +27,9 @@ app.add_middleware(
 # ---------- 创作台:选图 → 撰写 → 选社区(带失败重试) ----------
 
 
-@app.get("/api/images")
-def api_list_images(folder: str) -> list[dict]:
-    try:
-        return list_images(folder)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
 @app.get("/api/images/file")
 def api_image_file(path: str) -> Response:
+    """给创作台预览"随机选中的是哪张图"用,不是给人工浏览选图用的。"""
     try:
         data, media_type = read_image_bytes(path)
     except ValueError as e:
@@ -45,13 +38,16 @@ def api_image_file(path: str) -> Response:
 
 
 class DraftPayload(BaseModel):
-    image_path: str
+    folder: str
     extra_context: str = ""
 
 
 @app.post("/api/drafts")
 def api_create_draft(payload: DraftPayload) -> dict:
-    return create_draft(payload.image_path, payload.extra_context)
+    try:
+        return create_draft(payload.folder, payload.extra_context)
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 class AttemptPayload(BaseModel):
@@ -63,13 +59,16 @@ class AttemptPayload(BaseModel):
 
 @app.post("/api/drafts/{post_id}/attempts")
 def api_record_attempt(post_id: int, payload: AttemptPayload) -> dict:
-    attempt = record_attempt(
-        post_id=post_id,
-        subreddit=payload.subreddit,
-        outcome=payload.outcome,
-        reason=payload.reason,
-        reddit_url=payload.reddit_url,
-    )
+    try:
+        attempt = record_attempt(
+            post_id=post_id,
+            subreddit=payload.subreddit,
+            outcome=payload.outcome,
+            reason=payload.reason,
+            reddit_url=payload.reddit_url,
+        )
+    except (ValueError, RuntimeError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"ok": True, "outcome": attempt.outcome, "attempted_at": attempt.attempted_at.isoformat()}
 
 

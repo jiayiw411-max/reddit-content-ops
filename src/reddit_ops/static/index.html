@@ -71,19 +71,16 @@
   .btn-ghost { background: var(--sage-soft); color: #4E5A44; padding: 0.4rem 0.85rem; font-size: 0.8rem; margin: 0 0.35rem 0.35rem 0; }
   .btn-ghost.danger { background: var(--danger-soft); color: #8C4536; }
 
-  .image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; margin-top: 0.75rem; }
   .image-thumb {
-    position: relative; aspect-ratio: 1; border-radius: var(--radius-md); overflow: hidden; cursor: pointer;
-    border: 3px solid transparent; transition: all 0.15s ease; background: var(--surface-tint);
+    position: relative; aspect-ratio: 1; border-radius: var(--radius-md); overflow: hidden;
+    border: 3px solid transparent; background: var(--surface-tint);
   }
   .image-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .image-thumb:hover { transform: scale(1.03); }
   .image-thumb.selected { border-color: var(--clay); }
   .image-thumb.selected::after {
     content: "✓"; position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; border-radius: 50%;
     background: var(--clay); color: white; font-size: 0.7rem; display: flex; align-items: center; justify-content: center;
   }
-  .image-empty { color: var(--ink-soft); font-size: 0.85rem; padding: 1rem 0; }
 
   .candidate {
     display: flex; align-items: center; justify-content: space-between; padding: 0.7rem 0.9rem;
@@ -119,18 +116,16 @@
   <section id="workspace" class="active">
     <div class="block sage">
       <h2>第一步:选图</h2>
-      <p>给一个文件夹路径,浏览里面的图片,点击选中——模型会直接看图片内容生成文案,不是靠你手打描述。</p>
+      <p>给一个文件夹路径,自动跳过用过的图片,随机挑一张,直接看图片内容生成文案——不用你手动挑、也不是靠打字描述。</p>
     </div>
 
     <div class="card">
       <label>图片文件夹路径</label>
       <input type="text" id="folderPath" placeholder="/Users/你/Desktop/reddit图片">
-      <button class="btn-primary" id="browseBtn" style="background:var(--dust-blue);">浏览文件夹</button>
-      <div id="imageGridWrap" style="margin-top:0.5rem;"></div>
 
       <label>补充信息(可选——价格、地点这些图片里看不出来的事实)</label>
       <textarea id="extraContext" placeholder="例如:£3.50,M&S 买的"></textarea>
-      <button class="btn-primary" id="genBtn">生成草稿</button>
+      <button class="btn-primary" id="genBtn">随机选图 + 生成草稿</button>
     </div>
 
     <div id="draftArea"></div>
@@ -143,8 +138,6 @@
   </section>
 
 <script>
-let selectedImagePath = null;
-
 document.querySelectorAll('.tab').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.tab').forEach(b => b.classList.remove('active'));
@@ -156,44 +149,15 @@ document.querySelectorAll('.tab').forEach(btn => {
   });
 });
 
-document.getElementById('browseBtn').addEventListener('click', async () => {
-  const folder = document.getElementById('folderPath').value.trim();
-  if (!folder) { alert('先填文件夹路径'); return; }
-  const wrap = document.getElementById('imageGridWrap');
-  wrap.innerHTML = '<div class="image-empty">加载中...</div>';
-  try {
-    const res = await fetch('/api/images?folder=' + encodeURIComponent(folder));
-    if (!res.ok) { const e = await res.json(); throw new Error(e.detail || res.status); }
-    const images = await res.json();
-    if (images.length === 0) {
-      wrap.innerHTML = '<div class="image-empty">这个文件夹里没找到支持的图片(jpg/png/webp)。</div>';
-      return;
-    }
-    const grid = document.createElement('div');
-    grid.className = 'image-grid';
-    images.forEach(img => {
-      const thumb = document.createElement('div');
-      thumb.className = 'image-thumb';
-      thumb.dataset.path = img.path;
-      thumb.innerHTML = `<img src="/api/images/file?path=${encodeURIComponent(img.path)}" loading="lazy">`;
-      thumb.addEventListener('click', () => {
-        document.querySelectorAll('.image-thumb.selected').forEach(t => t.classList.remove('selected'));
-        thumb.classList.add('selected');
-        selectedImagePath = img.path;
-      });
-      grid.appendChild(thumb);
-    });
-    wrap.innerHTML = '';
-    wrap.appendChild(grid);
-  } catch (err) {
-    wrap.innerHTML = `<div class="image-empty">加载失败: ${err.message}</div>`;
-  }
-});
-
 function renderDraft(draft) {
   const wrap = document.createElement('div');
   wrap.className = 'card';
   wrap.innerHTML = `
+    <label>这次选中的图</label>
+    <div class="image-thumb selected" style="width:140px;">
+      <img src="/api/images/file?path=${encodeURIComponent(draft.image_path)}">
+    </div>
+    <div class="meta" style="margin-top:0.35rem;">${escapeHtml(draft.image_path.split('/').pop())}</div>
     <label>标题</label>
     <input type="text" class="titleInput" value="${escapeAttr(draft.title)}">
     <label>正文</label>
@@ -274,7 +238,8 @@ async function markAttempt(postId, subreddit, outcome, wrap) {
 }
 
 document.getElementById('genBtn').addEventListener('click', async () => {
-  if (!selectedImagePath) { alert('先在上面选一张图片'); return; }
+  const folder = document.getElementById('folderPath').value.trim();
+  if (!folder) { alert('先填图片文件夹路径'); return; }
   const extraContext = document.getElementById('extraContext').value.trim();
   const btn = document.getElementById('genBtn');
   btn.disabled = true; btn.textContent = '生成中...';
@@ -282,7 +247,7 @@ document.getElementById('genBtn').addEventListener('click', async () => {
     const res = await fetch('/api/drafts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ image_path: selectedImagePath, extra_context: extraContext })
+      body: JSON.stringify({ folder: folder, extra_context: extraContext })
     });
     if (!res.ok) { const e = await res.json(); throw new Error(e.detail || res.status); }
     const draft = await res.json();
@@ -292,7 +257,7 @@ document.getElementById('genBtn').addEventListener('click', async () => {
   } catch (err) {
     alert('生成失败: ' + err.message + '\n(检查一下 .env 里 ANTHROPIC_API_KEY 是否已配置)');
   } finally {
-    btn.disabled = false; btn.textContent = '生成草稿';
+    btn.disabled = false; btn.textContent = '随机选图 + 生成草稿';
   }
 });
 
