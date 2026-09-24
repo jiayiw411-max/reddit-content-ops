@@ -107,6 +107,7 @@ class PerformanceSnapshot(Base):
     num_comments: Mapped[int] = mapped_column(Integer)
     upvote_ratio: Mapped[float | None] = mapped_column(Float, nullable=True)
     num_crossposts: Mapped[int] = mapped_column(Integer, default=0)  # "转发"的官方代理指标
+    views: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 只有人工录入能拿到,API 不暴露
 
     post: Mapped[Post] = relationship(back_populates="snapshots")
 

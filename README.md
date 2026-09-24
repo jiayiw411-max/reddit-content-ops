@@ -28,7 +28,7 @@ Reddit 场景做了两处关键调整:
          人工确认 ──▶ 你手动发布(工具不自动发帖)
                │
                ▼
-      表现追踪(只读 Reddit 公开 .json 接口:score / num_comments / upvote_ratio / num_crossposts)
+      表现追踪(见下方"读取 Reddit 数据这件事"——目前是人工录入,官方 API 批下来后可切自动)
                │
                ▼
    校准(真实表现 vs 预测 bucket,连同 BanReport 一起反馈进下一轮生成与选社区)
@@ -59,15 +59,25 @@ cp .env.example .env  # 填入 REDDIT_USER_AGENT + ANTHROPIC_API_KEY
 reddit-ops init
 ```
 
-**Reddit 这边不需要注册任何应用。** Reddit 在 2025-11-11 关闭了个人开发者自助
-注册 OAuth 应用的入口(Responsible Builder Policy),reddit.com/prefs/apps 的
-create app 现在会卡在 reCAPTCHA 循环走不通,这是平台层面的限制,不是配置问题。
-我们读的都是公开数据(子版规则、帖子分数/评论数),所以直接走 Reddit 公开只读
-`.json` 接口(见 [`reddit_client.py`](src/reddit_ops/reddit_client.py)),
-只需要规范的 `REDDIT_USER_AGENT`,不需要 client_id/secret。代价是限速更紧
-(未认证约 10 req/min,代码里已做节流),对我们这种小用量的追踪场景够用。
-如果以后申请到官方 API 审批通过,可以把 `reddit_client.get_json` 换成 OAuth
-客户端,其余模块不用动。
+### 读取 Reddit 数据这件事
+
+Reddit 在 2025-11-11 关闭了个人开发者自助注册 OAuth 应用的入口(Responsible
+Builder Policy),连公开只读的 `.json` 接口现在也会被指纹级反爬检测拦截
+(403 Blocked,实测过,不是配置问题)。这不是靠换个 User-Agent 或者用浏览器
+自动化能绕过的——那条路要求主动绕过平台的反自动化保护,这个项目不走那条路,
+细节见 [`src/reddit_ops/reddit_client.py`](src/reddit_ops/reddit_client.py) 的注释。
+
+现阶段用两条腿走路:
+
+1. **官方 API 审批**(申请中,走 [Reddit 的 Data Access Request](https://support.reddithelp.com/hc/en-us/requests/new?ticket_form_id=14868593862164)):
+   批下来之后 `tracker/fetcher.py` 就能自动抓取,不用改其余模块。
+2. **人工录入**(现在就能用):`reddit-ops record` 命令 + [`tools/`](tools/) 里的
+   浏览器书签工具——你自己发完帖子后,打开帖子页面点一下书签,它读一下页面上
+   本来就显示给你的 score/评论数,拼好一条命令复制到剪贴板,你粘贴到终端就
+   记录完了。好处是浏览量这种官方 API 永远拿不到、只有作者本人能看到的数据,
+   这条路反而能录进去。
+
+`reddit-ops draft` 生成草稿这一步完全不需要读 Reddit,不受影响。
 
 ## 命令
 
@@ -75,7 +85,8 @@ create app 现在会卡在 reCAPTCHA 循环走不通,这是平台层面的限制
 reddit-ops init                                    # 初始化本地 SQLite
 reddit-ops draft "<图片描述>" <subreddit>            # 生成一篇草稿
 reddit-ops score "<标题>" "<正文>" <subreddit>       # 盲评打分 + bucket 预测
-reddit-ops track                                    # 抓取所有已发布帖子的最新表现
+reddit-ops record --url <帖子链接> --score N --comments N [--views N]  # 人工录入一次表现快照
+reddit-ops track                                    # 官方 API 批下来后:自动抓取所有已发布帖子的最新表现
 ```
 
 ## 测试
@@ -87,6 +98,7 @@ pytest
 ## 阶段
 
 1. ✅ 数据模型 + 三份标准文档 + LLM 生成/打分 CLI 跑通
-2. 社区匹配的"强制动作"抽取(选社区规则 → 结构化 required_actions)+ 校准循环(`review/calibration.py`,待建)
-3. 表现追踪定时任务 + 校准反馈自动生成"下一轮实验假设"
-4. 测试补全(mock Reddit/Anthropic 调用) + 部署
+2. ✅ 表现追踪(人工录入 + 书签工具),官方 API 审批中
+3. 社区匹配的"强制动作"抽取(选社区规则 → 结构化 required_actions)+ 校准循环(`review/calibration.py`,待建)
+4. 官方 API 批下来后:`track` 命令自动化 + 校准反馈自动生成"下一轮实验假设"
+5. 测试补全(mock Reddit/Anthropic 调用) + 部署
